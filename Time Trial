@@ -1,0 +1,67 @@
+import math
+
+def dist(point1, point2):
+    return ((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2) ** 0.5
+
+def polar(x, y):
+    r = (x ** 2 + y ** 2) ** 0.5
+    theta = math.degrees(math.atan2(y, x))
+    return r, theta
+
+def angle_mod_360(angle):
+    n = math.floor(angle / 360.0)
+    angle_between_0_and_360 = angle - n * 360.0
+    return angle_between_0_and_360 if angle_between_0_and_360 <= 180 else angle_between_0_and_360 - 360
+
+def get_waypoints_ordered_in_driving_direction(params):
+    waypoints = params.get('waypoints', [])
+    return list(reversed(waypoints)) if params.get('is_reversed', False) else waypoints
+
+def up_sample(waypoints, factor):
+    if not waypoints or len(waypoints) == 0:
+        return [[0, 0]]  # 기본값 반환
+
+    p = waypoints
+    n = len(p)
+    return [[i / factor * p[(j+1) % n][0] + (1 - i / factor) * p[j][0],
+             i / factor * p[(j+1) % n][1] + (1 - i / factor) * p[j][1]] for j in range(n) for i in range(factor)]
+
+def get_target_point(params):
+    waypoints = up_sample(get_waypoints_ordered_in_driving_direction(params), 20)
+
+    car = [params.get('x', 0.0), params.get('y', 0.0)]
+    distances = [dist(p, car) for p in waypoints]
+    min_dist = min(distances)
+    i_closest = distances.index(min_dist)
+
+    n = len(waypoints)
+    waypoints_starting_with_closest = [waypoints[(i+i_closest) % n] for i in range(n)]
+
+    r = params.get('track_width', 0.1) * 0.9
+    is_inside = [dist(p, car) < r for p in waypoints_starting_with_closest]
+
+    i_first_outside = next((i for i, v in enumerate(is_inside) if not v), -1)
+    return waypoints[i_closest] if i_first_outside < 0 else waypoints_starting_with_closest[i_first_outside]
+
+def get_target_steering_degree(params):
+    tx, ty = get_target_point(params)
+    car_x = params.get('x', 0.0)
+    car_y = params.get('y', 0.0)
+    heading = params.get('heading', 0.0)
+
+    dx = tx - car_x
+    dy = ty - car_y
+    _, target_angle = polar(dx, dy)
+    steering_angle = target_angle - heading
+
+    return angle_mod_360(steering_angle)
+
+def score_steer_to_point_ahead(params):
+    best_steering_angle = get_target_steering_degree(params)
+    steering_angle = params.get('steering_angle', 0.0)
+    error = (steering_angle - best_steering_angle) / 60.0
+    score = 1.0 - abs(error)
+    return max(score, 0.1)  # 최소값 0.1 보장
+
+def reward_function(params):
+    return float(score_steer_to_point_ahead(params))
